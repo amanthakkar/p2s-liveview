@@ -1,0 +1,13 @@
+# Example go2rtc config for the P2S live view.
+#
+# Copy to go2rtc.yaml on the Pi and fill in the real LAN access code.
+# The real go2rtc.yaml is mode 0600 and is NEVER committed — it contains
+# the printer's LAN access code. Get the code from the printer's screen
+# (Settings > LAN Only Liveview) or from ~/.local/share/bambu-ctl/access_code.
+#
+# streams:
+#   bambu: rtsps://bblp:<LAN_ACCESS_CODE>@192.168.1.234:322/streaming/live/1
+#
+# Replace 192.168.1.234 with your printer's LAN IP.
+streams:
+  bambu: rtsps://bblp:REPLACE_WITH_LAN_ACCESS_CODE@192.168.1.234:322/streaming/live/1

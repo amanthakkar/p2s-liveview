@@ -1,0 +1,9 @@
+# Dedicated tunnel for the P2S live view (separate from the main homelab
+# tunnel, so no root-owned config needs editing).
+tunnel: f6ca93e1-f282-457a-ac51-f62c8e221734
+credentials-file: /etc/cloudflared/creds/f6ca93e1-f282-457a-ac51-f62c8e221734.json
+
+ingress:
+- hostname: liveview.amanthakkar.com
+  service: http://caddy:80
+- service: http_status:404

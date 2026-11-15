@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>P2S · Live Print</title>
+<style>
+  body { margin: 0; background: #0f1115; color: #e8e8e8; font-family: system-ui, -apple-system, sans-serif; }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 24px 16px 48px; }
+  .head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  h1 { font-size: 22px; margin: 0; }
+  h1 .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: #888; margin-right: 8px; vertical-align: 1px; }
+  h1.live .dot { background: #ff3b30; animation: pulse 1.6s infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+  .head button { margin-left: auto; background: #1c2330; color: #e8e8e8; border: 1px solid #333; border-radius: 8px; padding: 6px 12px; font-size: 14px; cursor: pointer; }
+  .head button:hover { background: #273042; }
+  .head button:active { transform: scale(.97); }
+  .sub { color: #999; font-size: 14px; margin: 6px 0 16px; }
+  .player { position: relative; aspect-ratio: 16 / 9; background: #000; border-radius: 12px; overflow: hidden; }
+  .player video, .player img { width: 100%; height: 100%; object-fit: contain; display: block; background: #000; }
+  .live-tag { position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,.65); color: #fff; font-size: 12px; font-weight: 600; padding: 4px 8px; border-radius: 6px; letter-spacing: .04em; }
+  .live-tag .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #ff3b30; margin-right: 6px; animation: pulse 1.6s infinite; }
+  .stream-state { position: absolute; bottom: 10px; right: 10px; background: rgba(0,0,0,.65); color: #ccc; font-size: 12px; padding: 4px 8px; border-radius: 6px; }
+  .idle-note { text-align: center; padding: 18px 12px; color: #bbb; font-size: 15px; }
+  .bar { height: 8px; background: #222; border-radius: 4px; overflow: hidden; margin: 16px 0 8px; }
+  .bar > div { height: 100%; background: #4da3ff; width: 0%; transition: width .5s; }
+  .meta { display: flex; flex-wrap: wrap; gap: 8px 24px; font-size: 14px; color: #bbb; }
+  .meta b { color: #e8e8e8; font-weight: 600; }
+  footer { margin-top: 28px; color: #666; font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="head">
+    <h1 id="title"><span class="dot"></span>P2S · Live Print</h1>
+    <button id="refresh" type="button" title="Restart the stream and fetch fresh status">&#8635; Refresh stream</button>
+  </div>
+  <div class="sub">Bambu Lab P2S · streamed from the home lab</div>
+
+  <div class="player">
+    <video id="stream" autoplay muted playsinline style="display:none"></video>
+    <img id="snapshot" alt="Latest camera snapshot" style="display:none">
+    <div class="live-tag" id="live-tag" style="display:none"><span class="dot"></span>LIVE</div>
+    <div class="stream-state" id="stream-state"></div>
+  </div>
+  <div class="idle-note" id="idle-note" style="display:none">No print running right now — showing the latest snapshot.</div>
+
+  <div class="bar"><div id="progress"></div></div>
+  <div class="meta">
+    <span>Job: <b id="job">—</b></span>
+    <span>Progress: <b id="percent">—</b></span>
+    <span>Layer: <b id="layer">—</b></span>
+    <span>Status: <b id="status">—</b></span>
+    <span>Updated: <b id="updated">—</b></span>
+  </div>
+
+  <footer>Smooth live video, about a second or two behind the printer. The stream is only live while a print is running; when idle, this page shows a still snapshot instead. Job details refresh when the printer monitor reports in (every few minutes).</footer>
+</div>
+<script>
+const video = document.getElementById('stream');
+const snap = document.getElementById('snapshot');
+const title = document.getElementById('title');
+const liveTag = document.getElementById('live-tag');
+const streamState = document.getElementById('stream-state');
+const idleNote = document.getElementById('idle-note');
+const refreshBtn = document.getElementById('refresh');
+const MP4_URL = '/api/stream.mp4?src=bambu';
+const HLS_URL = '/api/stream.m3u8?src=bambu';
+
+let printing = false;
+let mode = null;            // 'mse' | 'hls' | 'snapshot'
+let mediaSource = null, sourceBuffer = null, reader = null, queue = [];
+let streamActive = false, streamRun = 0;
+let lastTime = -1, lastAdvanceAt = 0, snapTimer = null;
+
+function setState(t) { streamState.textContent = t; }
+
+// --- MSE (Media Source) player: a continuous fragmented-MP4 stream from
+// go2rtc. No segment windows, so no 1-second buffer cliff like HLS had.
+function pump() {
+  if (!sourceBuffer || sourceBuffer.updating || !queue.length) return;
+  try { sourceBuffer.appendBuffer(queue.shift()); } catch (e) { /* retry on next pump */ }
+}
+
+async function startMse(run) {
+  mode = 'mse';
+  setState('connecting…');
+  try {
+    mediaSource = new MediaSource();
+    video.src = URL.createObjectURL(mediaSource);
+    await new Promise((resolve, reject) => {
+      mediaSource.addEventListener('sourceopen', resolve, { once: true });
+      setTimeout(() => reject(new Error('ms timeout')), 8000);
+    });
+    if (run !== streamRun) return;
+    sourceBuffer = mediaSource.addSourceBuffer('video/mp4; codecs="avc1.640029"');
+    sourceBuffer.addEventListener('updateend', pump);
+    const res = await fetch(MP4_URL);
+    if (!res.ok || !res.body) throw new Error('mp4 fetch ' + res.status);
+    if (run !== streamRun) return;
+    reader = res.body.getReader();
+    streamActive = true;
+    lastAdvanceAt = Date.now();
+    video.play().catch(() => {});
+    setState('live');
+    while (streamActive && run === streamRun) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      queue.push(value);
+      pump();
+    }
+  } catch (e) {
+    if (run === streamRun) startHls(); // MSE unavailable/broken: native HLS
+  }
+}
+
+function startHls() {
+  mode = 'hls';
+  setState('connecting…');
+  if (video.canPlayType('application/vnd.apple.mpegurl')) {
+    video.src = HLS_URL;
+    video.play().catch(() => {});
+    setState('live');
+  } else {
+    startSnapshot(); // no MSE, no native HLS: stills
+  }
+}
+
+function stopVideo() {
+  streamActive = false;
+  if (reader) { reader.cancel().catch(() => {}); reader = null; }
+  queue = [];
+  if (mediaSource && mediaSource.readyState === 'open') {
+    try { mediaSource.endOfStream(); } catch (e) {}
+  }
+  if (video.src && video.src.startsWith('blob:')) URL.revokeObjectURL(video.src);
+  video.removeAttribute('src');
+  video.load();
+  mediaSource = null; sourceBuffer = null;
+}
+
+function startStream() {
+  streamRun++;
+  stopVideo();
+  video.style.display = 'block';
+  snap.style.display = 'none';
+  if ('MediaSource' in window && MediaSource.isTypeSupported('video/mp4; codecs="avc1.640029"')) {
+    startMse(streamRun);
+  } else {
+    startHls();
+  }
+}
+
+// --- Snapshot mode: idle state (and last-resort fallback).
+function fetchSnapshot() {
+  if (document.hidden) { scheduleSnapshot(5000); return; }
+  const next = new Image();
+  const url = '/api/frame.jpeg?src=bambu&t=' + Date.now();
+  next.onload = () => { snap.src = url; setState('snapshot'); scheduleSnapshot(30000); };
+  next.onerror = () => scheduleSnapshot(10000);
+  next.src = url;
+}
+function scheduleSnapshot(ms) {
+  clearTimeout(snapTimer);
+  snapTimer = setTimeout(fetchSnapshot, ms);
+}
+function startSnapshot() {
+  mode = 'snapshot';
+  stopVideo();
+  video.style.display = 'none';
+  snap.style.display = 'block';
+  fetchSnapshot();
+}
+
+async function refreshStatus() {
+  try {
+    const res = await fetch('/status.json', { cache: 'no-store' });
+    const st = await res.json();
+    const wasPrinting = printing;
+    printing = !!st.printing;
+    document.getElementById('job').textContent = st.job || '—';
+    document.getElementById('percent').textContent = (st.percent == null ? '—' : st.percent + '%');
+    document.getElementById('layer').textContent = (st.layer == null ? '—' : st.layer);
+    document.getElementById('status').textContent = st.status || '—';
+    document.getElementById('updated').textContent = st.updated ? new Date(st.updated).toLocaleTimeString() : '—';
+    document.getElementById('progress').style.width = (st.percent || 0) + '%';
+    title.classList.toggle('live', printing);
+    liveTag.style.display = printing ? 'block' : 'none';
+    idleNote.style.display = printing ? 'none' : 'block';
+    if (printing && (!wasPrinting || mode !== 'mse' && mode !== 'hls')) startStream();
+    if (!printing && mode !== 'snapshot') startSnapshot();
+  } catch (e) {
+    document.getElementById('status').textContent = 'status unavailable';
+  }
+}
+
+refreshBtn.addEventListener('click', () => {
+  if (printing) startStream();
+  else { clearTimeout(snapTimer); fetchSnapshot(); }
+  refreshStatus();
+});
+
+video.addEventListener('error', () => { if (printing) startStream(); });
+
+// Watchdog: if the video clock stops advancing while a print is running,
+// the stream stalled — restart it.
+setInterval(() => {
+  if (!printing || video.style.display === 'none') return;
+  if (video.paused) { video.play().catch(() => {}); lastAdvanceAt = Date.now(); return; }
+  const t = video.currentTime;
+  if (t > lastTime) { lastTime = t; lastAdvanceAt = Date.now(); }
+  if (Date.now() - lastAdvanceAt > 6000) { lastAdvanceAt = Date.now(); startStream(); }
+}, 3000);
+
+refreshStatus();
+setInterval(refreshStatus, 30000);
+</script>
+</body>
+</html>
