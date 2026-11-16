@@ -100,6 +100,15 @@ Verified smooth by Aman in the browser, Nov 16.
    that's idle reaping, not breakage. And don't infer frame rate from
    segment sizes: the ~500 KB segments are keyframes (GOP ~1 s), not the
    only frames — that misread cost a whole wrong rebuild.
+9. **Printer file access (Nov 16):** FTPS on :990 (vsFTPd 3.0.5) works,
+   but ONLY in active mode with TLS session reuse on the data channel;
+   PASV data-channel TLS hangs, and PROT C is refused (522, data must be
+   encrypted). It exposes only the SD card (empty here) — the current
+   print file (`/data/Metadata/plate_1.gcode` per MQTT) lives in internal
+   storage and RETR returns 550. So the printer cannot serve the current
+   model/STL, and the job name is just the Bambu Studio project name —
+   it lies when a project is reused. A "what's printing" model viewer
+   must get its file from Bambu Studio or Bambu Cloud, not the printer.
 
 ## Useful commands (on the Pi)
 
