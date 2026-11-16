@@ -22,6 +22,13 @@
   .live-tag .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #ff3b30; margin-right: 6px; animation: pulse 1.6s infinite; }
   .stream-state { position: absolute; bottom: 10px; right: 10px; background: rgba(0,0,0,.65); color: #ccc; font-size: 12px; padding: 4px 8px; border-radius: 6px; }
   .idle-note { text-align: center; padding: 18px 12px; color: #bbb; font-size: 15px; }
+  .model-card { display: none; align-items: center; gap: 16px; background: #171b22; border: 1px solid #262c38; border-radius: 12px; padding: 14px 16px; margin: 16px 0 4px; }
+  .model-card img { width: 96px; height: 96px; object-fit: cover; border-radius: 8px; background: #000; flex: none; }
+  .model-card .label { color: #999; font-size: 12px; letter-spacing: .05em; text-transform: uppercase; }
+  .model-card .name { font-size: 17px; font-weight: 600; margin: 3px 0 6px; }
+  .model-card a { color: #4da3ff; font-size: 14px; text-decoration: none; }
+  .model-card a:hover { text-decoration: underline; }
+  .model-card .own { color: #999; font-size: 13px; }
   .bar { height: 8px; background: #222; border-radius: 4px; overflow: hidden; margin: 16px 0 8px; }
   .bar > div { height: 100%; background: #4da3ff; width: 0%; transition: width .5s; }
   .meta { display: flex; flex-wrap: wrap; gap: 8px 24px; font-size: 14px; color: #bbb; }
@@ -44,6 +51,16 @@
     <div class="stream-state" id="stream-state"></div>
   </div>
   <div class="idle-note" id="idle-note" style="display:none">No print running right now — showing the latest snapshot.</div>
+
+  <div class="model-card" id="model-card">
+    <img id="model-cover" alt="Model thumbnail">
+    <div>
+      <div class="label" id="model-label">Now printing</div>
+      <div class="name" id="model-name">—</div>
+      <a id="model-link" href="#" target="_blank" rel="noopener" style="display:none">View on MakerWorld</a>
+      <span class="own" id="model-own" style="display:none">Your own design · sent from Bambu Studio</span>
+    </div>
+  </div>
 
   <div class="bar"><div id="progress"></div></div>
   <div class="meta">
@@ -172,6 +189,34 @@ function startSnapshot() {
   fetchSnapshot();
 }
 
+async function refreshModel() {
+  const card = document.getElementById('model-card');
+  try {
+    const res = await fetch('/now_printing.json', { cache: 'no-store' });
+    const m = await res.json();
+    if (!m.title) { card.style.display = 'none'; return; }
+    document.getElementById('model-label').textContent =
+      m.status_code === 4 ? 'Now printing' : 'Last print';
+    document.getElementById('model-name').textContent = m.title;
+    const cover = document.getElementById('model-cover');
+    const src = '/' + (m.cover_file || 'cover.png') + '?t=' + encodeURIComponent(m.fetched_at || '');
+    if (cover.getAttribute('src') !== src) cover.src = src;
+    const link = document.getElementById('model-link');
+    const own = document.getElementById('model-own');
+    if (m.makerworld_url) {
+      link.href = m.makerworld_url;
+      link.style.display = 'inline';
+      own.style.display = 'none';
+    } else {
+      link.style.display = 'none';
+      own.style.display = 'inline';
+    }
+    card.style.display = 'flex';
+  } catch (e) {
+    card.style.display = 'none';
+  }
+}
+
 async function refreshStatus() {
   try {
     const res = await fetch('/status.json', { cache: 'no-store' });
@@ -189,6 +234,7 @@ async function refreshStatus() {
     idleNote.style.display = printing ? 'none' : 'block';
     if (printing && (!wasPrinting || mode !== 'mse' && mode !== 'hls')) startStream();
     if (!printing && mode !== 'snapshot') startSnapshot();
+    refreshModel();
   } catch (e) {
     document.getElementById('status').textContent = 'status unavailable';
   }
